@@ -3,6 +3,8 @@ use strict;
 use warnings;
 use Sys::Netswitch::Factory;
 
+our $VERSION = '0.001';
+
 our %STATES = (
     start => 2,
     on => 1,
@@ -13,7 +15,7 @@ gen_accessors qw/ config_file running dhcp_pid wifi_pid /;
 gen_default_accessor state => $STATES{start};
 gen_default_accessor physical => "eth0";
 gen_default_accessor wireless => "wlan0";
-gen_default_accessor dhcp_prog => '/sbin/dhcpcd';
+gen_default_accessor dhcp_prog => '/sbin/dhcpcd -B -t 10 -d ';
 gen_default_accessor wifi_prog => "wpa_supplicant -Dwext -c /etc/wpa_supplicant/wpa_supplicant.conf -i";
 gen_default_accessor debug => sub {};
 
@@ -28,6 +30,9 @@ sub run {
 
     $self->running(1);
     $self->debug->( "Netswitch starting" );
+    $self->physical_on();
+    $self->state( $STATES{on});
+    sleep 5;
 
     while ( $self->running ) {
         $self->switch if $self->state_changed;
@@ -48,7 +53,7 @@ sub refresh_state {
     my $self = shift;
     my $net = $self->physical;
     open( my $state_file, "<", "/sys/class/net/$net/carrier" ) || die "$!";
-    chomp( my $state = <$state_file> );
+    chomp( my $state = <$state_file> || 0 );
     close( $state_file );
     return $state;
 }
@@ -56,7 +61,6 @@ sub refresh_state {
 sub switch {
     my $self = shift;
     $self->debug->( "Switching Connections" );
-    $self->stop;
     return $self->do_physical() if $self->state;
     return $self->do_wireless();
 }
@@ -75,16 +79,19 @@ sub do_wireless {
 
 sub physical_on {
     my $self = shift;
+    $self->debug->( "Starting physical connection" );
     $self->dhcp_start( $self->physical );
 }
 
 sub physical_off {
     my $self = shift;
+    $self->debug->( "Stopping physical connection" );
     $self->dhcp_stop;
 }
 
 sub wireless_on {
     my $self = shift;
+    $self->debug->( "Starting wireless connection" );
 
     my $pid = fork();
 
@@ -101,6 +108,7 @@ sub wireless_off {
     $self->dhcp_stop();
 
     return unless $self->wifi_pid;
+    $self->debug->( "Stopping wireless connection" );
 
     kill( 15, $self->wifi_pid ) || die "Could not kill wifi";
     waitpid( $self->wifi_pid, 0 );
@@ -111,6 +119,7 @@ sub wireless_off {
 sub dhcp_start {
     my $self = shift;
     my ( $if ) = @_;
+    $self->debug->( "Starting DHCP $if" );
 
     my $pid = fork();
 
@@ -123,6 +132,7 @@ sub dhcp_start {
 sub dhcp_stop {
     my $self = shift;
     return unless $self->dhcp_pid;
+    $self->debug->( "Stopping DHCP" );
 
     kill( 15, $self->dhcp_pid ) || die "Could not kill dhcp";
     waitpid( $self->dhcp_pid, 0 );
